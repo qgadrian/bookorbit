@@ -339,6 +339,12 @@ function MainMenu:addToMainMenu(menu_items)
             end,
         })
     end
+    if self.ui and self.ui.document then
+        table.insert(items, {
+            text = _("Reader top bar"),
+            sub_item_table = require("bookorbit_reader_bar").menu(self),
+        })
+    end
     table.insert(items, {
         id = "settings",
         text = _("Settings"),

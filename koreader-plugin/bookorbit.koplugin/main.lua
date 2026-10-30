@@ -47,6 +47,7 @@ local BookOrbitMainMenu = require("bookorbit_main_menu")
 local BookOrbitMenuPin = require("bookorbit_menu_pin")
 local BookOrbitNoteStamp = require("bookorbit_note_stamp")
 local BookOrbitProgressSync = require("bookorbit_progress_sync")
+local BookOrbitReaderBar = require("bookorbit_reader_bar")
 local BookOrbitSidecar = require("bookorbit_sidecar")
 local BookOrbitSweep = require("bookorbit_sweep")
 local BookOrbitUpdater = require("bookorbit_updater")
@@ -203,6 +204,14 @@ function BookOrbit:init()
     -- which side this instance serves. A book opening clears the way back to
     -- BookOrbit a closed one left.
     self.in_reader = self.ui ~= nil and self.ui.document ~= nil
+    if self.in_reader then
+        BookOrbitReaderBar.install(self)
+        self.ui:registerPostReaderReadyCallback(function()
+            UIManager:nextTick(function()
+                if self.ui and self.ui.document then BookOrbitReaderBar.refresh(self) end
+            end)
+        end)
+    end
     if self.in_reader then PluginShare.bookorbit_return_home = nil else self:registerEvents() end
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)

@@ -44,6 +44,10 @@ The plugin extends KOReader's live menu order to keep its Tools entry below Cali
 
 Settings > About & updates checks for plugin updates; an available update also shows in the BookOrbit menu. Sync status shows whether sync is working, recent sync activity, and Technical details for bug reports.
 
+## Reader top bar
+
+In an EPUB, open Tools > BookOrbit > Reader top bar to enable an optional header. Choose the items in its left, center and right sections, item order, font, font size, separator, side margins and bottom border. The border can display total book progress. Named personal presets, built-in presets and custom text are also available. Wi-Fi, frontlight and warmth items appear when the device supports them; Bluetooth status supports Kindle LIPC and a compatible Kobo Bluetooth plugin. The bar reserves room above reflowable paginated text. It is unavailable in continuous mode. For fixed-layout books, the optional PDF/CBZ setting draws the bar over the page and may obscure content.
+
 ## How syncing works
 
 - With auto sync on: progress pulls on open (with conflict prompts), pushes every N page turns (debounced, skipped offline), and the whole book state (progress, highlights, status, rating, reading time) uploads from live memory on close and suspend.

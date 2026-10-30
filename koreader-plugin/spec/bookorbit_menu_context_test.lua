@@ -94,7 +94,7 @@ assertEqual(items.bookorbit.sorting_hint, "tools", "the entry still falls back t
 
 -- In a book it adds This book.
 local reader = newPlugin({ reader = true })
-assertEqual(texts(menuItems(reader).bookorbit.sub_item_table), "Open BookOrbit|This book|Settings", "a book adds This book")
+assertEqual(texts(menuItems(reader).bookorbit.sub_item_table), "Open BookOrbit|This book|Reader top bar|Settings", "a book adds reader controls")
 
 -- The menu bar tab is a button: never remembered, never a list.
 local tab = items.bookorbit_tab
