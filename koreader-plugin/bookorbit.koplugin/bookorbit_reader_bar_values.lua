@@ -1,6 +1,18 @@
 local Device = require("device")
 local Values = {}
 
+local function call(object, method, ...)
+    if not object or type(object[method]) ~= "function" then return nil end
+    local ok, result = pcall(object[method], object, ...)
+    if ok then return result end
+end
+
+local function percent(value)
+    value = tonumber(value)
+    if not value or value ~= value or value == math.huge or value == -math.huge then return nil end
+    return math.floor(math.max(0, math.min(100, value)) + 0.5)
+end
+
 function Values.collect(view, cfg)
     local footer = view.footer
     local props = view.ui.doc_props or {}
@@ -15,34 +27,34 @@ function Values.collect(view, cfg)
         battery = "",
 
     }
-    if Device:hasBattery() then
-        local power = Device:getPowerDevice()
-        local capacity = power:getCapacity()
-        local icon = power:getBatterySymbol(power:isCharged(), power:isCharging(), capacity)
-        values.battery = (icon or "") .. " " .. tostring(capacity) .. "%"
+    local power = call(Device, "getPowerDevice")
+    if call(Device, "hasBattery") and power then
+        local capacity = percent(call(power, "getCapacity"))
+        if capacity then
+            local icon = call(power, "getBatterySymbol", call(power, "isCharged"), call(power, "isCharging"), capacity)
+            values.battery = (type(icon) == "string" and icon ~= "" and icon .. " " or "") .. capacity .. "%"
+        end
     end
     local _ = require("gettext")
     local needs = {}
     for _, zone in ipairs({ "left", "center", "right" }) do
         for key, selected in pairs(cfg[zone] or {}) do if selected then needs[key] = true end end
     end
-    if needs.wifi then
-        local network = require("ui/network/manager")
-        if Device:hasWifiToggle() then
-            values.wifi = network:isWifiOn() and "" or ""
-        end
+    if needs.wifi and call(Device, "hasWifiToggle") then
+        local ok, network = pcall(require, "ui/network/manager")
+        local on = ok and call(network, "isWifiOn")
+        if on == true then values.wifi = "" elseif on == false then values.wifi = "" end
     end
-    if needs.brightness or needs.warmth then
-        local power = Device:getPowerDevice()
-        if Device:hasFrontlight() and power then
-            local on = power:isFrontlightOn()
-            if needs.brightness then
-                values.brightness = on and string.format("☼ %d%%", power:frontlightIntensity()) or ("☼ " .. _("Off"))
-            end
-            if needs.warmth and Device:hasNaturalLight() then
-                local warmth = on and power:frontlightWarmth()
-                values.warmth = warmth and string.format("⊛ %d%%", warmth) or ("⊛ " .. _("Off"))
-            end
+    if (needs.brightness or needs.warmth) and call(Device, "hasFrontlight") and power then
+        local on = call(power, "isFrontlightOn")
+        if on == false then
+            if needs.brightness then values.brightness = "☼ " .. _("Off") end
+            if needs.warmth and call(Device, "hasNaturalLight") then values.warmth = "⊛ " .. _("Off") end
+        elseif on == true then
+            local brightness = needs.brightness and percent(call(power, "frontlightIntensity"))
+            local warmth = needs.warmth and call(Device, "hasNaturalLight") and percent(call(power, "frontlightWarmth"))
+            if brightness then values.brightness = string.format("☼ %d%%", brightness) end
+            if warmth then values.warmth = string.format("⊛ %d%%", warmth) end
         end
     end
     if needs.bluetooth then
