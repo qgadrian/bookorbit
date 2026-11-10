@@ -47,7 +47,7 @@ function server(input: RequestInfo | URL, init?: RequestInit) {
       root: '/',
       mounts: ['/books'],
       appDataPath: '/data',
-      libraries: [{ id: 7, name: 'Novels', icon: 'BookOpen', type: 'books', folders: ['/books/Fiction'] }],
+      libraries: [{ id: 7, name: 'Novels', icon: 'BookOpen', folders: ['/books/Fiction'] }],
     })
   if (url.pathname === '/api/v1/path/listing')
     return json({ path, state: path === '/proc' ? 'blocked' : 'ok', entries: LISTINGS[path] ?? [], truncated: false })
@@ -146,7 +146,7 @@ describe('FolderPickerModal', () => {
     expect(JSON.parse(localStorage.getItem('bookorbit:folder-picker:recent') ?? '[]')).toEqual(['/books'])
   })
 
-  it('warns about an overlap on a ticked folder and offers to leave the other library’s folder out', async () => {
+  it('refuses to add a folder that holds another library’s folder until that folder is left out', async () => {
     const wrapper = mountPicker()
     await settle()
 
@@ -154,6 +154,8 @@ describe('FolderPickerModal', () => {
     await settle()
 
     expect(wrapper.text()).toContain('Contains Fiction, which Novels reads.')
+    expect(wrapper.text()).toContain('1 picked folder overlaps another library.')
+    expect(button(wrapper, 'Add 1 folder').attributes('disabled')).toBeDefined()
     await button(wrapper, 'Leave out Fiction').trigger('click')
     await settle()
     await button(wrapper, 'Add 2 folders').trigger('click')
@@ -230,8 +232,12 @@ describe('FolderPickerModal', () => {
     await settle()
 
     expect(row(wrapper, '/books/Science Fiction').exists()).toBe(false)
-    await button(wrapper, 'Add 2 folders').trigger('click')
-    expect(wrapper.emitted('select')).toEqual([[['/books/Fiction', '/books/Unsorted']]])
+    // Novels reads Fiction, so the pair cannot be added until Fiction is removed.
+    expect(button(wrapper, 'Add 2 folders').attributes('disabled')).toBeDefined()
+    await button(wrapper, 'Remove').trigger('click')
+    await settle()
+    await button(wrapper, 'Add 1 folder').trigger('click')
+    expect(wrapper.emitted('select')).toEqual([[['/books/Unsorted']]])
   })
 
   it('leaves Enter on the hidden-system-folders button to that button, not the focused folder', async () => {
@@ -275,20 +281,6 @@ describe('FolderPickerModal', () => {
     expect(wrapper.text()).toContain('Looking at')
     expect(wrapper.text()).toContain('Would add 45 books')
     expect(wrapper.text()).toContain('Ann Leckie/Ancillary Justice.epub')
-  })
-
-  it('chooses one storage folder for podcasts', async () => {
-    const wrapper = mountPicker({ kind: 'podcastStorage', multiple: false, libraryName: 'History Podcasts' })
-    await settle()
-
-    expect(wrapper.find('h2').text()).toBe('Choose a storage folder')
-    expect(row(wrapper, '/books/Unsorted').find('input').attributes('type')).toBe('radio')
-    await row(wrapper, '/books/Unsorted').find('input').trigger('click')
-    await row(wrapper, '/books/Science Fiction').find('input').trigger('click')
-    await settle()
-    await button(wrapper, 'Use folder').trigger('click')
-
-    expect(wrapper.emitted('select')).toEqual([[['/books/Science Fiction']]])
   })
 
   it('completes a typed path with Tab and closes the list with Escape without closing the dialog', async () => {

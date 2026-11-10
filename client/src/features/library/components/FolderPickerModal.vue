@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useEventListener, useMediaQuery } from '@vueuse/core'
-import { Check, ChevronUp, FolderTree, Info, Radio, Undo2, X } from '@lucide/vue'
+import { Check, ChevronUp, FolderTree, Info, TriangleAlert, Undo2, X } from '@lucide/vue'
 import type { OrganizationMode } from '@bookorbit/types'
 import { useModal } from '@/composables/useModal'
 import { formatList } from '@/i18n/formatters'
@@ -15,7 +15,6 @@ import {
   isInside,
   leafName,
   parentPath,
-  type FolderPickerKind,
   type FolderStatus,
   type PickerLibrary,
 } from '../composables/folder-picker/folder-picker-rules'
@@ -33,8 +32,6 @@ const props = withDefaults(
   defineProps<{
     /** Folders the library already reads. */
     selectedPaths?: string[]
-    multiple?: boolean
-    kind?: FolderPickerKind
     libraryName?: string
     libraryIcon?: string | null
     /** The library being edited, left out of the others when checking overlaps. */
@@ -44,8 +41,6 @@ const props = withDefaults(
   }>(),
   {
     selectedPaths: () => [],
-    multiple: true,
-    kind: 'books',
     libraryName: '',
     libraryIcon: null,
     libraryId: null,
@@ -95,35 +90,33 @@ const libraries = computed<PickerLibrary[]>(() => {
   return list
 })
 const others = computed(() => libraries.value.filter((library) => !library.self))
-const multiple = computed(() => props.multiple)
-const kind = computed(() => props.kind)
-const modeLocked = computed(() => props.organizationModeLocked || props.kind !== 'books')
+const modeLocked = computed(() => props.organizationModeLocked)
 
 const selection = useFolderPickerSelection({
   data,
   own: () => own.value,
   others: () => others.value,
-  multiple: () => props.multiple,
   appDataPath: () => data.places.value?.appDataPath ?? null,
   mode,
   onModeChange: (next) => emit('update:organizationMode', next),
 })
 
 const selected = selection.selected
-const storage = computed(() => props.kind === 'podcastStorage')
-const title = computed(() => (storage.value ? t('library.folderBrowser.titleStorage') : t('library.folderBrowser.title')))
-const subtitle = computed(() => {
-  if (storage.value) return t('library.folderBrowser.subtitleStorage', { name: libraryName.value })
-  if (props.kind === 'podcastLocal') return t('library.folderBrowser.subtitleLocal', { name: libraryName.value })
-  return t('library.folderBrowser.subtitle', {
+/** Picked folders that overlap another library, which the server refuses until they are left out or removed. */
+const overlapping = computed(() => selected.value.filter((path) => selection.status(path)?.warn))
+const canAdd = computed(() => selected.value.length > 0 && overlapping.value.length === 0)
+const overlapMessage = computed(() =>
+  overlapping.value.length ? t('library.folderBrowser.footer.resolveOverlap', { count: overlapping.value.length }) : null,
+)
+const subtitle = computed(() =>
+  t('library.folderBrowser.subtitle', {
     name: libraryName.value,
     mode: mode.value === 'book_per_file' ? t('library.folderBrowser.mode.file') : t('library.folderBrowser.mode.folder'),
-  })
-})
+  }),
+)
 const totalBooks = computed(() => selected.value.reduce((sum, path) => sum + (booksIn(path) ?? 0), 0))
 const addLabel = computed(() => {
   const count = selected.value.length
-  if (!props.multiple) return t('library.folderBrowser.footer.use')
   if (phone.value) return count ? t('library.folderBrowser.footer.addShortCount', { count }) : t('library.folderBrowser.footer.addShort')
   return count ? t('library.folderBrowser.footer.addCount', { count }) : t('library.folderBrowser.footer.add')
 })
@@ -133,15 +126,11 @@ const noticeMessage = computed(() => (selection.notice.value ? t(selection.notic
 function booksIn(path: string): number | null {
   const summary = data.summaries.get(normalizeFolderPath(path))
   if (!summary) return null
-  return props.kind === 'books' ? booksAs(summary, mode.value) : summary.files
+  return booksAs(summary, mode.value)
 }
 
 function countLabel(count: number): string {
-  return t(props.kind === 'books' ? 'library.folderBrowser.count.books' : 'library.folderBrowser.count.episodes', { count })
-}
-
-function holdsLabel(count: number): string {
-  return t(props.kind === 'books' ? 'library.folderBrowser.plan.holdsBooks' : 'library.folderBrowser.plan.holdsEpisodes', { count })
+  return t('library.folderBrowser.count.books', { count })
 }
 
 function describeOverlap(path: string, status: FolderStatus): string {
@@ -150,14 +139,13 @@ function describeOverlap(path: string, status: FolderStatus): string {
     const libs = status.libraries ?? []
     if (libs.length === 1) {
       const folder = libs[0]!.folders.find((own) => isInside(own, path)) ?? libs[0]!.folders[0]!
-      return t('library.folderBrowser.plan.attention.containsOne', { folder: leafName(folder), library: libs[0]!.name })
+      return t('library.folderBrowser.plan.attention.containsOneBlocked', { folder: leafName(folder), library: libs[0]!.name })
     }
-    return t('library.folderBrowser.plan.attention.containsMany', { libraries: formatList(libs.map((library) => library.name)) })
+    return t('library.folderBrowser.plan.attention.containsManyBlocked', { libraries: formatList(libs.map((library) => library.name)) })
   }
   const library = status.library?.name ?? ''
-  if (status.exact)
-    return t('library.folderBrowser.plan.attention.overlapExact', { library, count: data.summaries.get(normalizeFolderPath(path))?.files ?? 0 })
-  return t('library.folderBrowser.plan.attention.overlapInside', { library })
+  if (status.exact) return t('library.folderBrowser.plan.attention.overlapExactBlocked', { library })
+  return t('library.folderBrowser.plan.attention.overlapInsideBlocked', { library })
 }
 
 function flashRow(path: string) {
@@ -194,7 +182,7 @@ function focusFolder(path: string) {
 
 function toggleFolder(path: string, event?: MouseEvent | KeyboardEvent) {
   const key = normalizeFolderPath(path)
-  if (event?.shiftKey && props.multiple) {
+  if (event?.shiftKey) {
     // Only the siblings on screen, so a range across find results never ticks folders it did not show.
     const parent = parentPath(key)
     selection.tickRange(
@@ -255,8 +243,6 @@ const context: FolderPickerContext = {
   data,
   tree,
   selection,
-  kind,
-  multiple,
   libraries,
   others,
   own,
@@ -276,7 +262,6 @@ const context: FolderPickerContext = {
   cancelNewFolder,
   booksIn,
   countLabel,
-  holdsLabel,
   describeOverlap,
 }
 provide(FOLDER_PICKER, context)
@@ -305,7 +290,7 @@ function onBackdrop() {
 }
 
 function confirm() {
-  if (selected.value.length === 0) return
+  if (!canAdd.value) return
   rememberRecentFolders(selected.value)
   emit('select', [...selected.value])
 }
@@ -389,7 +374,7 @@ async function open() {
   const landmarks = own.value.length ? own.value : opened.size ? [] : others.value.flatMap((library) => library.folders).slice(0, 1)
   for (const path of landmarks) for (const parent of ancestorsWithin(path, places.root)) opened.add(parent)
   tree.expanded.value = opened
-  if (props.kind === 'books') void data.loadUnclaimed()
+  void data.loadUnclaimed()
   // Open on the deepest folder unfolded, so the libraries' landmarks are on screen.
   const deepest = [...opened].sort((a, b) => b.length - a.length)[0]
   if (deepest) {
@@ -422,11 +407,10 @@ onBeforeUnmount(() => {
       >
         <header class="flex shrink-0 items-center gap-3 border-b border-border bg-card px-4 py-3">
           <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/12 text-primary" aria-hidden="true">
-            <Radio v-if="storage" :size="18" />
-            <FolderTree v-else :size="18" />
+            <FolderTree :size="18" />
           </span>
           <div class="min-w-0 flex-1">
-            <h2 id="folder-picker-title" class="truncate text-base font-semibold text-foreground">{{ title }}</h2>
+            <h2 id="folder-picker-title" class="truncate text-base font-semibold text-foreground">{{ t('library.folderBrowser.title') }}</h2>
             <p id="folder-picker-subtitle" class="truncate text-xs text-muted-foreground">{{ subtitle }}</p>
           </div>
           <button
@@ -467,6 +451,10 @@ onBeforeUnmount(() => {
               <Info :size="13" class="shrink-0 text-primary" aria-hidden="true" />
               <span class="truncate" role="status">{{ noticeMessage }}</span>
             </template>
+            <template v-else-if="overlapMessage">
+              <TriangleAlert :size="13" class="shrink-0 text-warning" aria-hidden="true" />
+              <span class="truncate text-foreground" role="status" :title="overlapMessage">{{ overlapMessage }}</span>
+            </template>
             <i18n-t v-else keypath="library.folderBrowser.footer.hints" scope="global">
               <template #move><PickerKbd>↑</PickerKbd><PickerKbd>↓</PickerKbd></template>
               <template #fold><PickerKbd>←</PickerKbd><PickerKbd>→</PickerKbd></template>
@@ -487,7 +475,7 @@ onBeforeUnmount(() => {
           <button
             type="button"
             class="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:pointer-events-none disabled:opacity-50"
-            :disabled="selected.length === 0"
+            :disabled="!canAdd"
             @click="confirm"
           >
             <Check :size="16" aria-hidden="true" />
@@ -510,11 +498,10 @@ onBeforeUnmount(() => {
     >
       <header class="flex shrink-0 items-center gap-3 border-b border-border bg-card px-3 py-2.5">
         <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/12 text-primary" aria-hidden="true">
-          <Radio v-if="storage" :size="18" />
-          <FolderTree v-else :size="18" />
+          <FolderTree :size="18" />
         </span>
         <div class="min-w-0 flex-1">
-          <h2 id="folder-picker-title" class="truncate text-base font-semibold text-foreground">{{ title }}</h2>
+          <h2 id="folder-picker-title" class="truncate text-base font-semibold text-foreground">{{ t('library.folderBrowser.title') }}</h2>
           <p id="folder-picker-subtitle" class="truncate text-xs text-muted-foreground">{{ subtitle }}</p>
         </div>
         <button
@@ -554,16 +541,18 @@ onBeforeUnmount(() => {
           }}</span>
           <span class="min-w-0">
             <span class="block truncate text-sm font-medium text-foreground">
-              {{ selected.length ? (multiple ? countLabel(totalBooks) : selected[0]) : t('library.folderBrowser.footer.nothingPicked') }}
+              {{ selected.length ? countLabel(totalBooks) : t('library.folderBrowser.footer.nothingPicked') }}
             </span>
-            <span class="block truncate text-xs text-muted-foreground">{{ t('library.folderBrowser.footer.seePlan') }}</span>
+            <span class="block truncate text-xs text-muted-foreground" :role="overlapMessage ? 'status' : undefined">{{
+              overlapMessage ?? t('library.folderBrowser.footer.seePlan')
+            }}</span>
           </span>
           <ChevronUp :size="15" class="shrink-0 text-muted-foreground" aria-hidden="true" />
         </button>
         <button
           type="button"
           class="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:pointer-events-none disabled:opacity-50"
-          :disabled="selected.length === 0"
+          :disabled="!canAdd"
           @click="confirm"
         >
           <Check :size="16" aria-hidden="true" />

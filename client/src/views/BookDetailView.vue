@@ -2,7 +2,8 @@
 import { computed, defineAsyncComponent, onMounted, provide, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import type { BookDetail, BookMetadataLockField } from '@bookorbit/types'
+import { toast } from 'vue-sonner'
+import type { BookDetail, BookLinksChangedEvent, BookMergedEvent, BookMetadataLockField } from '@bookorbit/types'
 import BookDetailLayout from '@/features/book/components/detail/BookDetailLayout.vue'
 import DetailsTab from '@/features/book/components/detail/tabs/DetailsTab.vue'
 import FilesTab from '@/features/book/components/detail/tabs/FilesTab.vue'
@@ -11,7 +12,7 @@ import { useBookDetail } from '@/features/book/composables/useBookDetail'
 import { useBookEvents } from '@/features/book/composables/useBookEvents'
 import { useScanProgress } from '@/features/scanner/composables/useScanProgress'
 import { usePageTitle } from '@/composables/usePageTitle'
-import { normalizeBookDetailTab } from '@/features/book/lib/book-detail-tabs'
+import { hasChaptersTab, normalizeBookDetailTab } from '@/features/book/lib/book-detail-tabs'
 import { useLibraryPermissions } from '@/features/library/composables/useLibraryPermissions'
 import { useLibraries } from '@/features/library/composables/useLibraries'
 import { COVER_ASPECT_RATIO_KEY, DEFAULT_COVER_ASPECT_RATIO } from '@/features/book/lib/cover-aspect-ratio'
@@ -51,16 +52,16 @@ const tab = computed(() => {
   return requested === 'edit' && detail.value && !canEditMetadata.value ? 'details' : requested
 })
 
-const { detail, loading, notFound, fetch } = useBookDetail()
+const { detail, loading, notFound, mergedInto, fetch } = useBookDetail()
 const canEditMetadata = computed(() => hasLibraryPermission('library_edit_metadata', detail.value?.libraryId, 'editor'))
 const parentLibrary = computed(() =>
   detail.value?.libraryId != null && detail.value.libraryName ? { id: detail.value.libraryId, name: detail.value.libraryName } : null,
 )
-const hasAudio = computed(() => detail.value?.audioMetadata != null)
+const hasChapters = computed(() => hasChaptersTab(detail.value))
 
-// A chapters link to a book without audio (or one whose audio was removed) lands on the details.
+// A chapters link to a book without audio or read-along narration (or one whose audio was removed) lands on the details.
 watch([tab, detail], ([current, book]) => {
-  if (current === 'chapters' && book && book.id === bookId.value && !hasAudio.value) {
+  if (current === 'chapters' && book && book.id === bookId.value && !hasChapters.value) {
     void router.replace({ name: 'book-detail', params: { bookId: book.id }, query: { ...route.query, tab: 'details' } })
   }
 })
@@ -100,7 +101,7 @@ watch(
   },
 )
 
-const { onBookMissing, onBookRestored, onBookMoved, onBookTransferred, onBookProgressChanged } = useBookEvents()
+const { onBookMissing, onBookRestored, onBookMoved, onBookTransferred, onBookProgressChanged, onBookMerged, onBookLinksChanged } = useBookEvents()
 onBookMissing((bookIds) => {
   if (detail.value && bookIds.includes(detail.value.id)) {
     detail.value = { ...detail.value, status: 'missing' }
@@ -119,6 +120,44 @@ onBookProgressChanged((event) => {
   if (event.bookId === bookId.value) fetch(event.bookId)
 })
 
+/** A merged-away id lives on as the kept book: replace the URL so Back does not return to a dead page (E8). */
+let pendingMergeRedirect: number | null = null
+
+function redirectToMergedBook(targetBookId: number) {
+  // The socket event and the sheet's own result can both report one merge.
+  if (targetBookId === bookId.value || targetBookId === pendingMergeRedirect) return
+  pendingMergeRedirect = targetBookId
+  toast.info(t('book.merge.redirected'))
+  void router.replace({ name: 'book-detail', params: { bookId: targetBookId }, query: route.query }).finally(() => {
+    pendingMergeRedirect = null
+  })
+}
+
+function handleBookMerged(event: BookMergedEvent) {
+  if (event.sourceBookIds.includes(bookId.value)) redirectToMergedBook(event.targetBookId)
+  else if (event.targetBookId === bookId.value) void fetch(bookId.value)
+}
+
+onBookMerged(handleBookMerged)
+
+function refreshLinks() {
+  void fetch(bookId.value)
+}
+
+/** A link made or removed anywhere changes this page's "Also available as" row and its menu. */
+function handleLinksChanged(event: BookLinksChangedEvent) {
+  const current = detail.value
+  if (!current) return
+  const touched = event.bookIds.includes(current.id) || (current.linkedBooks ?? []).some((book) => event.bookIds.includes(book.bookId))
+  if (touched) refreshLinks()
+}
+
+onBookLinksChanged(handleLinksChanged)
+
+watch(mergedInto, (targetBookId) => {
+  if (targetBookId !== null) redirectToMergedBook(targetBookId)
+})
+
 watch(bookId, (id) => fetch(id), { immediate: true })
 
 // The two lazy tabs render nothing at all while their chunk arrives, so a cold click on either
@@ -127,7 +166,7 @@ onMounted(() => {
   const warm = () => {
     void loadReadingLogTab()
     void loadHighlightsTab()
-    if (hasAudio.value) void loadChaptersTab()
+    if (hasChapters.value) void loadChaptersTab()
   }
   if (typeof requestIdleCallback === 'function') requestIdleCallback(warm, { timeout: 2000 })
   else setTimeout(warm, 500)
@@ -167,7 +206,7 @@ function onChaptersChanged() {
     :cover-tint="coverTint"
     :can-edit-metadata="canEditMetadata"
     :parent-library="parentLibrary"
-    :has-audio="hasAudio"
+    :has-chapters="hasChapters"
   >
     <Transition name="content" mode="out-in">
       <div v-if="detail" key="detail" class="@container/book-detail h-full">
@@ -177,7 +216,14 @@ function onChaptersChanged() {
           as loading. They revalidate silently on activation instead.
         -->
         <KeepAlive :include="KEPT_ALIVE_TABS">
-          <DetailsTab v-if="tab === 'details'" :book="detail" @saved="onMetadataSaved" @moved="handleMovedToLibrary" />
+          <DetailsTab
+            v-if="tab === 'details'"
+            :book="detail"
+            @saved="onMetadataSaved"
+            @moved="handleMovedToLibrary"
+            @merged="handleBookMerged"
+            @links-changed="refreshLinks"
+          />
           <EditMetadataTab
             v-else-if="tab === 'edit' && canEditMetadata"
             :book="detail"
@@ -186,7 +232,7 @@ function onChaptersChanged() {
             @cover-changed="onCoverChanged"
           />
           <FilesTab v-else-if="tab === 'files'" :book="detail" @refetch="fetch(detail.id)" />
-          <ChaptersTab v-else-if="tab === 'chapters' && hasAudio" :book="detail" @changed="onChaptersChanged" />
+          <ChaptersTab v-else-if="tab === 'chapters' && hasChapters" :book="detail" @changed="onChaptersChanged" />
           <ReadingLogTab v-else-if="tab === 'reading-log'" :book="detail" @saved="onMetadataSaved" @refetch="handleBookRefetch" />
           <HighlightsTab v-else-if="tab === 'highlights'" :book="detail" />
         </KeepAlive>
